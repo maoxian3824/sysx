@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sysx"
+version = "1.0.0"
+description = "轻量级系统信息与开发辅助 CLI 工具，纯标准库实现，零第三方依赖"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["cli", "system", "monitoring", "devops", "procfs", "sysinfo"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+sysx = "sysx:main"
+
+[project.urls]
+Homepage = "https://github.com/maoxian3824/sysx"
+Repository = "https://github.com/maoxian3824/sysx"
+Issues = "https://github.com/maoxian3824/sysx/issues"
+
+[tool.setuptools]
+py-modules = ["sysx"]
