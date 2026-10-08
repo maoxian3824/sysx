@@ -2,6 +2,7 @@
 
 > 轻量级系统信息与开发辅助 CLI 工具 — 纯 Python 标准库实现，零第三方依赖。
 
+[![Tests](https://github.com/maoxian3824/sysx/actions/workflows/test.yml/badge.svg)](https://github.com/maoxian3824/sysx/actions/workflows/test.yml)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
@@ -190,14 +191,19 @@ sysx ports -j | jq -r '.[].port'
 ## 开发
 
 ```bash
-# 语法检查
-python3 -m py_compile sysx.py
+# 运行测试套件（43 个用例，纯标准库 unittest）
+python3 -m unittest discover -s tests -v
 
-# 跑一遍所有子命令
-for cmd in info mem disk proc net env ports uptime doctor; do
-    python3 sysx.py "$cmd" > /dev/null || echo "FAILED: $cmd"
-done
+# 严格模式：资源泄漏视为错误
+python3 -W error::ResourceWarning -m unittest discover -s tests
+
+# 构建并校验不含运行时依赖
+python3 -m build
+python3 scripts/check_no_deps.py
 ```
+
+CI 在 Python 3.8 – 3.12 矩阵及 macOS 上自动运行上述检查，
+详见 [.github/workflows/test.yml](.github/workflows/test.yml)。
 
 ## License
 
