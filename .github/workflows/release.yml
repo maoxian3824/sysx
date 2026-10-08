@@ -81,16 +81,21 @@ jobs:
           esac
 
       - name: 生成 SHA256 校验和
+        # 注意：必须生成在 dist/ 目录之外，否则 PyPI 发布工具会扫描到
+        # 非发行包文件（.txt）并报 InvalidDistribution。
         run: |
-          cd dist
-          sha256sum *.whl *.tar.gz > SHA256SUMS.txt
+          sha256sum dist/*.whl dist/*.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: 归档构建产物
         uses: actions/upload-artifact@v5
         with:
           name: dist
-          path: dist/
+          # dist/ 只含 wheel 与 sdist；SHA256SUMS.txt 单独存放，
+          # 供 GitHub Release 附带，但不进入 PyPI 发布目录。
+          path: |
+            dist
+            SHA256SUMS.txt
           retention-days: 7
 
   # -------------------------------------------------- 发布到 GitHub Release
@@ -118,7 +123,7 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
-            dist/SHA256SUMS.txt
+            SHA256SUMS.txt
 
   # -------------------------------------------------- 发布到 PyPI
   # 使用 Trusted Publishing（OIDC），无需任何 API Token 或密码。
