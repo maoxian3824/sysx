@@ -9,14 +9,21 @@ on:
       tag:
         description: "要发布的 tag（如 v1.0.0）"
         required: true
+      publish_to_pypi:
+        description: "是否同时发布到 PyPI"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: 构建并发布
+  # -------------------------------------------------- 构建与校验
+  build:
+    name: 构建与校验
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -27,39 +34,128 @@ jobs:
           python-version: "3.11"
 
       - name: 安装构建工具
-        run: python -m pip install --upgrade pip build
+        run: python -m pip install --upgrade pip build twine
 
       - name: 运行测试（发布前把关）
         run: python -m unittest discover -s tests -v
 
-      - name: 构建 wheel 与 sdist
-        run: python -m build
-
       - name: 校验零依赖
-        run: python scripts/check_no_deps.py
+        run: |
+          # 先构建，check_no_deps 需要读取 wheel
+          python -m build
+          python scripts/check_no_deps.py
+
+      - name: 用 twine 校验元数据（模拟 PyPI 的检查）
+        run: python -m twine check dist/*
+
+      - name: 校验版本号与 tag 一致
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          PKG_VERSION=$(python -c "
+          import tomllib
+          print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])
+          ")
+          TAG_VERSION="${TAG#v}"
+          echo "tag=$TAG"
+          echo "pyproject 版本=$PKG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "FAILED: pyproject.toml 版本 ($PKG_VERSION) 与 tag ($TAG) 不一致"
+            exit 1
+          fi
+          echo "版本一致"
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: 校验发行包名
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          echo "wheel: $WHEEL"
+          case "$WHEEL" in
+            *sysx_cli-*) echo "发行包名正确: sysx-cli" ;;
+            *) echo "FAILED: 发行包名应为 sysx-cli"; exit 1 ;;
+          esac
 
       - name: 生成 SHA256 校验和
         run: |
           cd dist
-          sha256sum * > SHA256SUMS.txt
+          sha256sum *.whl *.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: 确定版本号
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
+      - name: 归档构建产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  # -------------------------------------------------- 发布到 GitHub Release
+  github-release:
+    name: 发布到 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist
+
+      - name: 列出产物
+        run: ls -lh dist/
 
       - name: 创建 Release 并上传产物
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: sysx ${{ steps.version.outputs.tag }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          name: sysx v${{ needs.build.outputs.version }}
           generate_release_notes: true
           files: |
             dist/*.whl
             dist/*.tar.gz
             dist/SHA256SUMS.txt
+
+  # -------------------------------------------------- 发布到 PyPI
+  # 使用 Trusted Publishing（OIDC），无需任何 API Token 或密码。
+  # 前置条件：需在 PyPI 后台为该仓库配置好 Trusted Publisher，
+  #           具体步骤见 PUBLISHING.md
+  pypi:
+    name: 发布到 PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # 仅在手动触发且勾选了 publish_to_pypi 时执行。
+    # 想要打 tag 就自动发布，把下面的 if 换成：
+    #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sysx-cli
+    permissions:
+      # OIDC 令牌必需，用于向 PyPI 证明身份
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist
+
+      - name: 列出待发布产物
+        run: |
+          ls -lh dist/
+          echo "--- 即将发布到 PyPI ---"
+          ls dist/*.whl dist/*.tar.gz
+
+      - name: 发布到 PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Trusted Publishing 模式，不需要 password
+          # 发布前会由 PyPI 校验 OIDC 令牌
+          packages-dir: dist/
+          # 若同名版本已存在则跳过而非报错
+          skip-existing: true
+          print-hash: true

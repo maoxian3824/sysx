@@ -3,6 +3,7 @@
 > 轻量级系统信息与开发辅助 CLI 工具 — 纯 Python 标准库实现，零第三方依赖。
 
 [![Tests](https://github.com/maoxian3824/sysx/actions/workflows/test.yml/badge.svg)](https://github.com/maoxian3824/sysx/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/sysx-cli.svg)](https://pypi.org/project/sysx-cli/)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
@@ -21,19 +22,21 @@
 
 ## 安装
 
-### 方式一：直接运行（无需安装）
+> **包名 vs 命令名**：PyPI 发行名是 `sysx-cli`（`sysx` 已被占用），
+> 但安装后的运行命令仍是 `sysx`。
+
+### 方式一：pip 安装（推荐）
+
+```bash
+pip install sysx-cli
+sysx info
+```
+
+### 方式二：直接运行单文件（无需安装）
 
 ```bash
 curl -LO https://raw.githubusercontent.com/maoxian3824/sysx/master/sysx.py
-chmod +x sysx.py
-./sysx.py info
-```
-
-### 方式二：pip 安装
-
-```bash
-pip install git+https://github.com/maoxian3824/sysx.git
-sysx info
+python3 sysx.py info
 ```
 
 ### 方式三：从源码
@@ -42,6 +45,13 @@ sysx info
 git clone https://github.com/maoxian3824/sysx.git
 cd sysx
 python3 sysx.py info
+```
+
+### 方式四：从 GitHub Release 安装
+
+```bash
+curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.0.0-py3-none-any.whl
+pip install sysx_cli-1.0.0-py3-none-any.whl
 ```
 
 ## 使用
@@ -191,19 +201,22 @@ sysx ports -j | jq -r '.[].port'
 ## 开发
 
 ```bash
-# 运行测试套件（43 个用例，纯标准库 unittest）
+# 运行测试套件（46 个用例，纯标准库 unittest）
 python3 -m unittest discover -s tests -v
 
 # 严格模式：资源泄漏视为错误
 python3 -W error::ResourceWarning -m unittest discover -s tests
 
-# 构建并校验不含运行时依赖
+# 构建并校验
 python3 -m build
-python3 scripts/check_no_deps.py
+python3 -m twine check dist/*      # PyPI 元数据校验
+python3 scripts/check_no_deps.py   # 零依赖校验
 ```
 
 CI 在 Python 3.8 – 3.12 矩阵及 macOS 上自动运行上述检查，
 详见 [.github/workflows/test.yml](.github/workflows/test.yml)。
+
+发布到 PyPI 的完整流程见 [PUBLISHING.md](PUBLISHING.md)。
 
 ## License
 

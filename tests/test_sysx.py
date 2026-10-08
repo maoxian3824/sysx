@@ -396,7 +396,8 @@ class TestPackaging(unittest.TestCase):
 
     def test_project_metadata(self):
         project = self.meta["project"]
-        self.assertEqual(project["name"], "sysx")
+        # PyPI 发行名（命令名单独在 scripts 中定义）
+        self.assertEqual(project["name"], "sysx-cli")
         self.assertIn("description", project)
         self.assertIn("readme", project)
 
@@ -406,10 +407,36 @@ class TestPackaging(unittest.TestCase):
 
     def test_console_script_entry_point(self):
         scripts = self.meta["project"]["scripts"]
+        # 命令名与包名解耦：安装 sysx-cli 后提供 sysx 命令
         self.assertEqual(scripts.get("sysx"), "sysx:main")
 
     def test_version_matches_module(self):
         self.assertEqual(self.meta["project"]["version"], sysx.__version__)
+
+    def test_pypi_required_metadata(self):
+        """PyPI 上传要求的关键字段。"""
+        project = self.meta["project"]
+        for field in ("name", "version", "description", "readme",
+                      "requires-python", "license"):
+            self.assertIn(field, project, f"缺少 PyPI 必需字段: {field}")
+        self.assertTrue(project.get("authors"), "缺少 authors")
+        self.assertTrue(project.get("classifiers"), "缺少 classifiers")
+
+    def test_distribution_name_is_pypi_safe(self):
+        """发行名必须符合 PyPI 命名规范，且不能与已占用的名字冲突。"""
+        import re
+        name = self.meta["project"]["name"]
+        # PyPI 允许字母、数字、连字符、下划线、点
+        self.assertRegex(name, r"^[A-Za-z0-9._-]+$")
+        # 记录已知被占用的名字，防止误用
+        taken = {"sysx", "systools", "systool"}
+        self.assertNotIn(name.lower(), taken,
+                         f"{name} 在 PyPI 上已被占用")
+
+    def test_urls_present(self):
+        urls = self.meta["project"].get("urls", {})
+        self.assertIn("Homepage", urls)
+        self.assertIn("Repository", urls)
 
 
 if __name__ == "__main__":

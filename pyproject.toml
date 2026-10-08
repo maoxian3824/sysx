@@ -3,20 +3,26 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sysx"
+# PyPI 上的发行包名。运行命令仍是 sysx（见 [project.scripts]）。
+# 注意：PyPI 上 sysx / systools / systool 均已被占用，故使用 sysx-cli。
+name = "sysx-cli"
 version = "1.0.0"
 description = "轻量级系统信息与开发辅助 CLI 工具，纯标准库实现，零第三方依赖"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["cli", "system", "monitoring", "devops", "procfs", "sysinfo"]
+authors = [
+    { name = "maoxian3824", email = "maoxian3824@users.noreply.github.com" },
+]
+keywords = ["cli", "system", "monitoring", "devops", "procfs", "sysinfo", "console"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -30,14 +36,20 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = []
+dev = [
+    "build>=1.0",
+    "twine>=5.0",
+]
 
 [project.scripts]
+# 运行命令保持 sysx，与发行包名解耦
 sysx = "sysx:main"
 
 [project.urls]
 Homepage = "https://github.com/maoxian3824/sysx"
 Repository = "https://github.com/maoxian3824/sysx"
+Documentation = "https://github.com/maoxian3824/sysx#readme"
+Changelog = "https://github.com/maoxian3824/sysx/blob/master/CHANGELOG.md"
 Issues = "https://github.com/maoxian3824/sysx/issues"
 
 [tool.setuptools]
