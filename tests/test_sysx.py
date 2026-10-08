@@ -206,8 +206,13 @@ class TestCollectors(unittest.TestCase):
 
     def test_collect_mem_structure(self):
         data = sysx.collect_mem(None)
-        if data is None:
+        # 任何平台都必须返回 dict，不能是 None（保证 JSON 输出始终是对象）
+        self.assertIsInstance(data, dict, "collect_mem 应始终返回 dict")
+        self.assertIn("supported", data)
+
+        if not data["supported"]:
             self.skipTest("当前平台不支持 /proc/meminfo")
+
         for key in ("total", "used", "free", "available", "percent", "swap"):
             self.assertIn(key, data)
         self.assertGreater(data["total"], 0)
@@ -228,10 +233,14 @@ class TestCollectors(unittest.TestCase):
 
     def test_collect_uptime(self):
         data = sysx.collect_uptime(None)
+        # 结构必须稳定
+        for key in ("seconds", "human", "load"):
+            self.assertIn(key, data)
         if data["seconds"] is None:
             self.skipTest("当前平台不支持 /proc/uptime")
         self.assertGreater(data["seconds"], 0)
         self.assertIsInstance(data["human"], str)
+        self.assertTrue(data["human"])
 
     def test_collect_ports_structure(self):
         data = sysx.collect_ports(None)
@@ -268,9 +277,13 @@ class TestCollectors(unittest.TestCase):
         self.assertLessEqual(len(data), 5)
 
 
+HAS_PROC = os.path.isdir("/proc") and os.path.isfile("/proc/self/stat")
+
+
 class TestProcStatParsing(unittest.TestCase):
     """进程 stat 解析的边界情况。"""
 
+    @unittest.skipUnless(HAS_PROC, "当前平台无 /proc 文件系统（如 macOS/Windows）")
     def test_read_proc_stat_self(self):
         info = sysx._read_proc_stat(str(os.getpid()))
         self.assertIsNotNone(info, "应能读到当前进程的 stat")

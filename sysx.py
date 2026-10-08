@@ -246,7 +246,9 @@ def render_info(data):
 def collect_mem(args=None):
     content = read_text("/proc/meminfo")
     if not content:
-        return None
+        # 非 Linux 平台无 /proc，返回结构化结果而非 None，
+        # 保证 JSON 消费方拿到的始终是对象
+        return {"supported": False, "reason": "当前平台无 /proc/meminfo"}
 
     raw = {}
     for line in content.splitlines():
@@ -271,6 +273,7 @@ def collect_mem(args=None):
     swap_used = swap_total - swap_free
 
     return {
+        "supported": True,
         "total": total,
         "used": used,
         "free": free,
@@ -301,8 +304,8 @@ def render_bar(percent, width=30):
 
 
 def render_mem(data):
-    if not data:
-        print("无法读取内存信息（需要 Linux /proc 文件系统）")
+    if not data or not data.get("supported", True):
+        print(_paint("  当前平台不支持内存信息读取（需要 Linux /proc）", C.YELLOW))
         return
     section("内存")
     print(f"  总量  {human_bytes(data['total'])}")
@@ -793,7 +796,7 @@ def collect_doctor(args=None):
 
     # 内存余量
     mem = collect_mem()
-    if mem:
+    if mem and mem.get("supported", True):
         check("内存余量", mem["percent"] < 90,
               f"{human_bytes(mem['available'])} 可用")
 

@@ -57,7 +57,8 @@ jobs:
       - name: 冒烟测试 — JSON 输出合法
         run: |
           for cmd in info mem disk proc net env ports uptime doctor; do
-            python sysx.py "$cmd" -j | python -c "import json,sys; json.load(sys.stdin)" \
+            python sysx.py "$cmd" -j > /tmp/out.json
+            python -c "import json,sys; d=json.load(open('/tmp/out.json')); assert d is not None, 'JSON 输出为 null'" \
               || { echo "FAILED: $cmd JSON 输出非法"; exit 1; }
           done
           echo "所有子命令 JSON 输出合法"
@@ -98,21 +99,7 @@ jobs:
           /tmp/venv/bin/sysx uptime
 
       - name: 校验零依赖
-        run: |
-          python - <<'PY'
-          import glob, zipfile, sys
-          whl = glob.glob("dist/*.whl")[0]
-          with zipfile.ZipFile(whl) as zf:
-              meta = [n for n in zf.namelist() if n.endswith("METADATA")][0]
-              content = zf.read(meta).decode()
-          requires = [ln for ln in content.splitlines()
-                      if ln.startswith("Requires-Dist:")]
-          if requires:
-              print("发现运行时依赖，与零依赖承诺不符：")
-              print("\n".join(requires))
-              sys.exit(1)
-          print("零依赖校验通过")
-          PY
+        run: python scripts/check_no_deps.py
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
