@@ -8,14 +8,14 @@ version = "1.0.0"
 description = "轻量级系统信息与开发辅助 CLI 工具，纯标准库实现，零第三方依赖"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["cli", "system", "monitoring", "devops", "procfs", "sysinfo"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",

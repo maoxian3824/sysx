@@ -565,11 +565,10 @@ def collect_net(args=None):
 
     # 主机 IP（通过 UDP 连接探测，不会真的发包）
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(0.5)
-        sock.connect(("8.8.8.8", 80))
-        info["local_ip"] = sock.getsockname()[0]
-        sock.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.5)
+            sock.connect(("8.8.8.8", 80))
+            info["local_ip"] = sock.getsockname()[0]
     except (OSError, socket.error):
         info["local_ip"] = None
 
@@ -743,10 +742,10 @@ def _check_network():
     errors = []
     for host, port in targets:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            sock.connect((host, port))
-            sock.close()
+            # 用 with 确保异常路径下 socket 也会被关闭
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(3)
+                sock.connect((host, port))
             return True, f"可访问 {host}:{port}"
         except (OSError, socket.error) as exc:
             errors.append(str(exc))
