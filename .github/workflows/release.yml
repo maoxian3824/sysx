@@ -91,11 +91,9 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: dist
-          # dist/ 只含 wheel 与 sdist；SHA256SUMS.txt 单独存放，
-          # 供 GitHub Release 附带，但不进入 PyPI 发布目录。
-          path: |
-            dist
-            SHA256SUMS.txt
+          # 只上传 wheel 与 sdist；SHA256SUMS.txt 由 github-release
+          # 步骤自行生成，避免污染 PyPI 发布目录。
+          path: dist/
           retention-days: 7
 
   # -------------------------------------------------- 发布到 GitHub Release
@@ -114,6 +112,13 @@ jobs:
       - name: 列出产物
         run: ls -lh dist/
 
+      - name: 生成 SHA256 校验和
+        # 在 GitHub Release 侧生成校验和，不污染 PyPI 发布目录。
+        run: |
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: 创建 Release 并上传产物
         uses: softprops/action-gh-release@v2
         with:
@@ -123,7 +128,7 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
-            SHA256SUMS.txt
+            dist/SHA256SUMS.txt
 
   # -------------------------------------------------- 发布到 PyPI
   # 使用 Trusted Publishing（OIDC），无需任何 API Token 或密码。
