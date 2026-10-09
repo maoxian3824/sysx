@@ -1,5 +1,7 @@
 # sysx
 
+> English version: [README.en.md](README.en.md)
+
 > 轻量级系统信息与开发辅助 CLI 工具 — 纯 Python 标准库实现，零第三方依赖。
 
 [![Tests](https://github.com/maoxian3824/sysx/actions/workflows/test.yml/badge.svg)](https://github.com/maoxian3824/sysx/actions/workflows/test.yml)
