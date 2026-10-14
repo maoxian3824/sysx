@@ -9,13 +9,15 @@ sysx 自动化测试套件
     python3 tests/test_sysx.py
 """
 
+import argparse
+import datetime
 import io
 import json
 import os
 import subprocess
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 # 让测试可以直接 import sysx.py
@@ -141,6 +143,27 @@ class TestHelpers(unittest.TestCase):
                 out = sysx.human_duration(raw)
                 self.assertEqual(out, "0s")
                 self.assertNotIn("-", out)
+
+    def test_disp_width(self):
+        self.assertEqual(sysx._disp_width("abc"), 3)
+        self.assertEqual(sysx._disp_width("名称"), 4)   # CJK 双宽
+        self.assertEqual(sysx._disp_width("中a"), 3)
+
+    def test_render_table_cjk_header_width(self):
+        # 表头中文应按双宽计算，分隔行该列为 4 个 '-'
+        sysx.C.disable()
+        out = sysx.render_table(["项目"], [["os"]])
+        self.assertEqual(out.splitlines()[1], "----")
+
+    def test_human_bytes_negative_is_zero(self):
+        self.assertEqual(sysx.human_bytes(-1), "0 B")
+        self.assertEqual(sysx.human_bytes(-(1024 ** 3)), "0 B")
+
+    def test_render_bar_none(self):
+        sysx.C.disable()
+        bar = sysx.render_bar(None, width=10)
+        self.assertEqual(len(bar), 10)
+        self.assertEqual(bar.count("█"), 0)
 
 
 class TestColorControl(unittest.TestCase):
@@ -539,6 +562,19 @@ class TestPortParsing(unittest.TestCase):
         self.assertEqual(data[0]["port"], 8080)
         self.assertEqual(data[0]["address"], "?")
 
+    def test_decode_ipv6(self):
+        self.assertEqual(sysx._decode_ipv6("0" * 32), "::")
+        # 内核小端表示的 loopback ::1
+        self.assertEqual(sysx._decode_ipv6("00000000000000000000000001000000"), "::1")
+        # 长度不足或非法均返回 "?"
+        self.assertEqual(sysx._decode_ipv6("00" * 15), "?")
+        self.assertEqual(sysx._decode_ipv6("xyz"), "?")
+
+    def test_unescape_mount(self):
+        self.assertEqual(sysx._unescape_mount("/mnt/my\\040disk"), "/mnt/my disk")
+        self.assertEqual(sysx._unescape_mount("/a\\134b"), "/a\\b")  # \134 = 反斜杠
+        self.assertEqual(sysx._unescape_mount("/plain/path"), "/plain/path")
+
 
 class TestDistroParsing(unittest.TestCase):
     """/etc/os-release 解析：引号剥离与续行合并。"""
@@ -581,6 +617,53 @@ class TestDistroParsing(unittest.TestCase):
     def test_empty_returns_none(self):
         self.assertIsNone(self._read(""))
         self.assertIsNone(self._read(None))
+
+    def test_newline_unescape(self):
+        # 值内的 \n 应还原为真实换行
+        content = 'PRETTY_NAME="Line1\\nLine2"\n'
+        self.assertEqual(self._read(content), "Line1\nLine2")
+
+
+class TestRobustness(unittest.TestCase):
+    """平台判断、启动时间、debug 模式等健壮性逻辑。"""
+
+    def test_is_root_returns_bool_or_none(self):
+        r = sysx._is_root()
+        # Linux 返回 bool；无 geteuid 的平台返回 None
+        self.assertTrue(r is None or isinstance(r, bool))
+
+    def test_read_boot_time_parses_btime(self):
+        fake = "cpu  1 2 3\nbtime 1700000000\nprocesses 10\n"
+        with mock.patch.object(sysx, "read_text", return_value=fake):
+            bt = sysx._read_boot_time()
+        self.assertEqual(bt, datetime.datetime.fromtimestamp(1700000000))
+
+    def test_read_boot_time_missing(self):
+        with mock.patch.object(sysx, "read_text", return_value=None):
+            self.assertIsNone(sysx._read_boot_time())
+
+    def test_debug_reraises_exception(self):
+        def boom(args):
+            raise ValueError("boom")
+        args = argparse.Namespace(command="info", json=False, debug=True,
+                                  collector=boom, renderer=lambda d: None)
+        with mock.patch.object(sysx, "build_parser") as bp:
+            bp.return_value.parse_args.return_value = args
+            with self.assertRaises(ValueError):
+                sysx.main([])
+
+    def test_no_debug_returns_one_on_error(self):
+        def boom(args):
+            raise ValueError("boom")
+        args = argparse.Namespace(command="info", json=False, debug=False,
+                                  collector=boom, renderer=lambda d: None)
+        with mock.patch.object(sysx, "build_parser") as bp:
+            bp.return_value.parse_args.return_value = args
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                rc = sysx.main([])
+        self.assertEqual(rc, 1)
+        self.assertIn("ValueError", buf.getvalue())
 
 
 if __name__ == "__main__":

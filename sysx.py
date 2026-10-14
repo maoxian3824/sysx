@@ -6,9 +6,11 @@ sysx - 轻量级系统信息与开发辅助 CLI 工具
 """
 
 import argparse
+import ipaddress
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -29,6 +31,9 @@ try:
     PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 except (ValueError, OSError, AttributeError):
     PAGE_SIZE = 4096
+
+# 是否存在 /proc 文件系统（用于跨平台降级提示）
+HAS_PROC = os.path.isdir("/proc")
 
 # ---------------------------------------------------------------- ANSI 颜色
 
@@ -64,8 +69,10 @@ def _paint(text, color):
 # ---------------------------------------------------------------- 工具函数
 
 def human_bytes(n):
-    """把字节数格式化为人类可读形式。"""
+    """把字节数格式化为人类可读形式。负数按 0 处理。"""
     size = float(n)
+    if size < 0:
+        size = 0.0
     for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
         if size < 1024 or unit == "PB":
             if unit == "B":
@@ -99,27 +106,29 @@ def read_text(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return fh.read()
-    except (OSError, IOError):
+    except OSError:
         return None
 
 
+def _disp_width(text):
+    """按显示宽度统计：CJK 等宽字符按 2 计，其余按 1。"""
+    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in str(text))
+
+
 def render_table(headers, rows):
-    """渲染对齐的文本表格。"""
+    """渲染对齐的文本表格（表头与数据行使用同一套宽度统计）。"""
     if not rows:
         return ""
     cols = len(headers)
-    widths = [len(str(h)) for h in headers]
+    widths = [_disp_width(h) for h in headers]
     for row in rows:
         for i in range(cols):
             cell = str(row[i]) if i < len(row) else ""
-            # 中文等宽字符粗略按 2 个宽度计算
-            width = sum(2 if ord(ch) > 0x2E80 else 1 for ch in cell)
-            widths[i] = max(widths[i], width)
+            widths[i] = max(widths[i], _disp_width(cell))
 
     def pad(text, width):
         text = str(text)
-        cur = sum(2 if ord(ch) > 0x2E80 else 1 for ch in text)
-        return text + " " * max(0, width - cur)
+        return text + " " * max(0, width - _disp_width(text))
 
     out = []
     out.append(_paint("  ".join(pad(h, widths[i]) for i, h in enumerate(headers)),
@@ -148,17 +157,32 @@ def section(title):
 
 # ---------------------------------------------------------------- info 子命令
 
+def _read_boot_time():
+    """从 /proc/stat 的 btime 字段读取真实启动时间（epoch 转 datetime）。"""
+    content = read_text("/proc/stat")
+    if content:
+        for line in content.splitlines():
+            if line.startswith("btime "):
+                try:
+                    return datetime.fromtimestamp(int(line.split()[1]))
+                except (ValueError, OSError, OverflowError):
+                    return None
+    return None
+
+
 def collect_info(args=None):
     uname = platform.uname()
-    boot_time = None
+    boot_time = _read_boot_time()
     uptime_seconds = None
 
-    # Linux: 从 /proc/uptime 取更精确的运行时长
+    # Linux: 从 /proc/uptime 取更精确的运行时长；启动时间优先用 btime，
+    # 取不到时才用 now - uptime 兜底（后者会受系统时间被修改影响）。
     uptime_raw = read_text("/proc/uptime")
     if uptime_raw:
         try:
             uptime_seconds = float(uptime_raw.split()[0])
-            boot_time = datetime.now() - timedelta(seconds=uptime_seconds)
+            if boot_time is None:
+                boot_time = datetime.now() - timedelta(seconds=uptime_seconds)
         except (ValueError, IndexError):
             pass
 
@@ -226,6 +250,8 @@ def _read_distro():
         # 仅在首尾成对出现时剥离一层引号，避免误伤值内嵌的引号
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
+        # 还原值内的换义符（\n / \t）
+        value = value.replace("\\n", "\n").replace("\\t", "\t")
         info[key] = value
     return info.get("PRETTY_NAME") or info.get("NAME")
 
@@ -314,7 +340,9 @@ def collect_mem(args=None):
 
 
 def render_bar(percent, width=30):
-    """渲染进度条，按用量着色。percent 会被 clamp 到 [0, 100]。"""
+    """渲染进度条，按用量着色。percent 会被 clamp 到 [0, 100]，None 视为 0。"""
+    if percent is None:
+        percent = 0.0
     percent = min(max(float(percent), 0.0), 100.0)
     filled = int(width * percent / 100)
     bar = "█" * filled + "░" * (width - filled)
@@ -372,7 +400,7 @@ def collect_disk(args=None):
     for part in best.values():
         try:
             usage = shutil.disk_usage(part["mountpoint"])
-        except (OSError, IOError):
+        except OSError:
             continue
         percent = (usage.used / usage.total * 100) if usage.total else 0
         mounts.append({
@@ -418,17 +446,22 @@ def parse_proc_mounts():
         if mountpoint in seen:
             continue
         seen.add(mountpoint)
-        # 反转义 /proc/mounts 中的八进制转义
-        mountpoint = (mountpoint.replace("\\040", " ")
-                                .replace("\\011", "\t")
-                                .replace("\\012", "\n"))
+        mountpoint = _unescape_mount(mountpoint)
         result.append({"device": device, "mountpoint": mountpoint, "fstype": fstype})
     return result
 
 
+def _unescape_mount(s):
+    """解码 /proc/mounts 中的八进制转义（\\040=空格, \\011=Tab, \\134=反斜杠）。"""
+    return re.sub(r"\\(\d{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
 def render_disk(data):
     if not data:
-        print("未找到可用的块设备挂载点")
+        if HAS_PROC:
+            print("未找到可用的块设备挂载点")
+        else:
+            print("当前平台不支持磁盘信息（需要 Linux /proc/mounts）")
         return
     rows = []
     for m in data:
@@ -547,7 +580,8 @@ def collect_proc(limit=10, sort_by="cpu", interval=0.25):
             "state": cur["state"],
             "cpu_percent": round(cpu_percent, 1),
             "rss": cur["rss"],
-            "mem_percent": round(cur["rss"] / total_mem * 100, 2) if total_mem else 0,
+            # 读不到 MemTotal 时标记为 None，避免把"无数据"误显示成 0%
+            "mem_percent": round(cur["rss"] / total_mem * 100, 2) if total_mem else None,
         })
 
     key = "rss" if sort_by == "mem" else "cpu_percent"
@@ -557,7 +591,10 @@ def collect_proc(limit=10, sort_by="cpu", interval=0.25):
 
 def render_proc(data):
     if not data:
-        print("未读到进程信息（需要 Linux /proc 文件系统）")
+        if HAS_PROC:
+            print("未读到进程信息")
+        else:
+            print("当前平台不支持进程信息（需要 Linux /proc 文件系统）")
         return
     rows = []
     for p in data:
@@ -567,7 +604,7 @@ def render_proc(data):
             p["state"],
             f"{p['cpu_percent']}%",
             human_bytes(p["rss"]),
-            f"{p['mem_percent']}%",
+            f"{p['mem_percent']}%" if p["mem_percent"] is not None else "-",
         ])
     print(render_table(["PID", "名称", "状态", "CPU", "内存", "内存占比"], rows))
 
@@ -592,10 +629,10 @@ def collect_net(args=None):
             if state:
                 iface["state"] = state.strip()
             try:
-                with open(f"/sys/class/net/{name}/speed") as fh:
+                with open(f"/sys/class/net/{name}/speed", encoding="utf-8") as fh:
                     speed = int(fh.read().strip())
-                    # 网卡未连接或虚拟网卡时内核返回负数
-                    iface["speed"] = speed if speed > 0 else None
+                    # 未连接/虚拟网卡返回负数；内核用 0xFFFFFFFF 表示速率未知
+                    iface["speed"] = speed if 0 < speed < 0xFFFFFFFF else None
             except (OSError, ValueError):
                 pass
             info["interfaces"].append(iface)
@@ -627,7 +664,7 @@ def collect_net(args=None):
 def render_net(data):
     print(_paint(f"  主机名  {data['hostname']}", C.BOLD))
     if data.get("local_ip"):
-        print(f"  本机 IP  {_paint(data['local_ip'], C.GREEN)}")
+        print(f"  默认出口 IP  {_paint(data['local_ip'], C.GREEN)}")
     if data.get("dns"):
         print(f"  DNS     {', '.join(data['dns'])}")
 
@@ -679,6 +716,19 @@ def render_env(data):
 
 # ---------------------------------------------------------------- ports 子命令
 
+def _decode_ipv6(addr_hex):
+    """把 /proc/net/*6 的 32 位十六进制 IPv6 地址解码为标准字符串。
+    内核按 4 个 u32 存储、每个 u32 内小端，故每组 4 字节需反转。"""
+    try:
+        raw = bytes.fromhex(addr_hex)
+    except ValueError:
+        return "?"
+    if len(raw) != 16:
+        return "?"
+    ordered = bytes(b for i in range(0, 16, 4) for b in raw[i:i + 4][::-1])
+    return ipaddress.IPv6Address(ordered).compressed
+
+
 def collect_ports(args=None):
     """解析监听/绑定的端口：
     TCP / TCP6 取 LISTEN（状态 0A）；UDP / UDP6 取已绑定的未连接
@@ -710,8 +760,7 @@ def collect_ports(args=None):
                 continue
             try:
                 if proto.endswith("6"):
-                    # IPv6 完整解码较繁琐，这里只区分"全网卡"与具体地址
-                    ip = "[::]" if addr_hex == "0" * 32 else "::"
+                    ip = _decode_ipv6(addr_hex)
                 else:
                     ip = ".".join(str(int(addr_hex[i:i + 2], 16))
                                   for i in (6, 4, 2, 0))
@@ -734,7 +783,10 @@ def collect_ports(args=None):
 
 def render_ports(data):
     if not data:
-        print("未发现监听/绑定的端口")
+        if HAS_PROC:
+            print("未发现监听/绑定的端口")
+        else:
+            print("当前平台不支持端口信息（需要 Linux /proc/net）")
         return
     rows = [[p["proto"], p["address"], p["port"]] for p in data]
     print(render_table(["协议", "监听地址", "端口"], rows))
@@ -809,6 +861,17 @@ def _check_network(timeout=3):
     return False, detail[:60]
 
 
+def _is_root():
+    """是否 root；平台不支持（如 Windows 无 geteuid）时返回 None。"""
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        return None
+    try:
+        return geteuid() == 0
+    except OSError:
+        return None
+
+
 def collect_doctor(args=None):
     """开发环境体检。"""
     checks = []
@@ -826,9 +889,12 @@ def collect_doctor(args=None):
         path = shutil.which(tool)
         check(tool, path is not None, path or "未安装")
 
-    # 权限
-    check("root 权限", os.geteuid() == 0,
-          "当前是 root" if os.geteuid() == 0 else "普通用户")
+    # 权限（Windows 无 geteuid，跳过而非误报失败）
+    root = _is_root()
+    if root is None:
+        check("root 权限", True, "当前平台不支持该检查")
+    else:
+        check("root 权限", root, "当前是 root" if root else "普通用户")
 
     # 网络探测：DNS 与外网连通并发执行，缩短断网环境下的等待
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -889,6 +955,8 @@ def build_parser():
     )
     parser.add_argument("-V", "--version", action="version",
                         version=f"sysx {__version__}")
+    parser.add_argument("--debug", action="store_true",
+                        help="发生错误时打印完整堆栈信息")
 
     sub = parser.add_subparsers(dest="command", metavar="<命令>")
 
@@ -940,15 +1008,29 @@ def main(argv=None):
     try:
         data = args.collector(args)
         emit(data, args.json, args.renderer)
+    except BrokenPipeError:
+        # 下游管道提前关闭（如 `sysx info | head`）：静默优雅退出，
+        # 并把 stdout 重定向到 devnull，避免解释器退出时再次 flush 报错。
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        return 0
     except KeyboardInterrupt:
         print("\n已取消", file=sys.stderr)
         return 130
     except Exception as exc:  # 单项失败给友好提示，不暴露 traceback
+        if getattr(args, "debug", False):
+            raise
         print(f"sysx: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("（加 --debug 可查看完整堆栈）", file=sys.stderr)
         return 1
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        os._exit(0)
