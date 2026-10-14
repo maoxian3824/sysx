@@ -58,8 +58,8 @@ python3 sysx.py info
 ### Method 4: From a GitHub Release
 
 ```bash
-curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.0.0-py3-none-any.whl
-pip install sysx_cli-1.0.0-py3-none-any.whl
+curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.1.0-py3-none-any.whl
+pip install sysx_cli-1.1.0-py3-none-any.whl
 ```
 
 ## Usage
