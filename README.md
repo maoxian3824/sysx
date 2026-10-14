@@ -71,7 +71,7 @@ sysx <命令> [选项]
 | `disk` | 磁盘挂载点与使用率（按使用率排序） |
 | `proc` | 占用最高的进程，可按 CPU / 内存排序 |
 | `net` | 网络接口、MAC、链路状态、本机 IP、DNS |
-| `ports` | 监听中的 TCP 端口 |
+| `ports` | 监听中的 TCP 与绑定的 UDP 端口 |
 | `env` | 相关环境变量（Shell、语言工具链、容器等） |
 | `uptime` | 运行时长与 1/5/15 分钟负载 |
 | `doctor` | 开发环境体检：工具链、网络、磁盘余量 |
@@ -183,7 +183,7 @@ sysx ports -j | jq -r '.[].port'
 | 磁盘挂载 | `/proc/mounts` + `shutil.disk_usage` |
 | 网络接口 | `/sys/class/net/*` |
 | DNS | `/etc/resolv.conf` |
-| 监听端口 | `/proc/net/tcp`、`/proc/net/tcp6` |
+| 监听/绑定端口 | `/proc/net/tcp`、`/proc/net/tcp6`、`/proc/net/udp`、`/proc/net/udp6` |
 
 **关于 CPU 占用率**：直接读 `/proc/<pid>/stat` 只能拿到进程的累计 CPU 时间，
 除以总和会得出错误结果（长运行进程会被严重高估）。`sysx` 采用两次采样（间隔 250ms）

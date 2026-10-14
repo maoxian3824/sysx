@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 __version__ = "1.0.0"
@@ -32,8 +33,9 @@ except (ValueError, OSError, AttributeError):
 # ---------------------------------------------------------------- ANSI 颜色
 
 class C:
-    """ANSI 颜色。当输出不是 TTY 或设置了 NO_COLOR 时自动禁用。"""
-    _enabled = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    """ANSI 颜色。是否启用在运行时由 main() 按当前 stdout 判定，
+    而非导入时求值，以兼容 stdout 被重定向/替换的场景。"""
+    _enabled = True  # 默认启用；main() 启动时会按实际 stdout 重新判定
 
     RESET = "\033[0m"
     BOLD = "\033[1m"
@@ -74,8 +76,10 @@ def human_bytes(n):
 
 
 def human_duration(seconds):
-    """把秒数格式化为人类可读形式。"""
+    """把秒数格式化为人类可读形式。负值（如时钟回拨）按 0 处理。"""
     seconds = int(seconds)
+    if seconds < 0:
+        seconds = 0
     days, rem = divmod(seconds, 86400)
     hours, rem = divmod(rem, 3600)
     minutes, secs = divmod(rem, 60)
@@ -128,11 +132,12 @@ def render_table(headers, rows):
 
 
 def emit(data, as_json, renderer):
-    """统一输出分发：JSON 模式下打印 JSON，否则调用渲染函数。"""
+    """统一输出分发：JSON 模式打印 JSON，否则调用渲染函数并补一个空行。"""
     if as_json:
         print(json.dumps(data, indent=2, ensure_ascii=False))
     else:
         renderer(data)
+        print()
 
 
 def section(title):
@@ -199,11 +204,29 @@ def _read_distro():
     content = read_text("/etc/os-release")
     if not content:
         return None
+    # 合并以反斜杠续行的行（os-release 规范允许）
+    merged = []
+    pending = ""
+    for raw in content.splitlines():
+        if raw.endswith("\\"):
+            pending += raw[:-1]
+        else:
+            merged.append(pending + raw)
+            pending = ""
+    if pending:
+        merged.append(pending)
+
     info = {}
-    for line in content.splitlines():
-        if "=" in line:
-            key, _, value = line.partition("=")
-            info[key.strip()] = value.strip().strip('"')
+    for line in merged:
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        # 仅在首尾成对出现时剥离一层引号，避免误伤值内嵌的引号
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        info[key] = value
     return info.get("PRETTY_NAME") or info.get("NAME")
 
 
@@ -291,7 +314,8 @@ def collect_mem(args=None):
 
 
 def render_bar(percent, width=30):
-    """渲染进度条，按用量着色。"""
+    """渲染进度条，按用量着色。percent 会被 clamp 到 [0, 100]。"""
+    percent = min(max(float(percent), 0.0), 100.0)
     filled = int(width * percent / 100)
     bar = "█" * filled + "░" * (width - filled)
     if percent >= 90:
@@ -326,14 +350,26 @@ def render_mem(data):
 
 # ---------------------------------------------------------------- disk 子命令
 
+def _mount_rank(mountpoint):
+    """挂载点优先级，用于同一设备多个 bind mount 时择优：
+    / 最优先，其次路径越浅越优先，最后按字典序保证稳定。"""
+    if mountpoint == "/":
+        return (0, 0, "")
+    return (1, mountpoint.count("/"), mountpoint)
+
+
 def collect_disk(args=None):
+    # 容器环境中同一设备常被 bind mount 到多个路径。为每个设备挑选
+    # 最"根级"的挂载点（优先 /，其次最浅路径），避免保留 /etc/hosts
+    # 这类噪音路径而漏掉真正的根分区。
+    best = {}
+    for part in parse_proc_mounts():
+        dev = part["device"]
+        if dev not in best or _mount_rank(part["mountpoint"]) < _mount_rank(best[dev]["mountpoint"]):
+            best[dev] = part
+
     mounts = []
-    seen_devices = set()
-    for part in psutil_like_partitions():
-        # 容器环境中同一块设备常被 bind mount 到多个路径，按设备去重
-        if part["device"] in seen_devices:
-            continue
-        seen_devices.add(part["device"])
+    for part in best.values():
         try:
             usage = shutil.disk_usage(part["mountpoint"])
         except (OSError, IOError):
@@ -352,7 +388,7 @@ def collect_disk(args=None):
     return mounts
 
 
-def psutil_like_partitions():
+def parse_proc_mounts():
     """从 /proc/mounts 解析挂载点，只保留真实块设备。"""
     content = read_text("/proc/mounts")
     if not content:
@@ -644,9 +680,17 @@ def render_env(data):
 # ---------------------------------------------------------------- ports 子命令
 
 def collect_ports(args=None):
-    """从 /proc/net/tcp 解析监听端口。"""
+    """解析监听/绑定的端口：
+    TCP / TCP6 取 LISTEN（状态 0A）；UDP / UDP6 取已绑定的未连接
+    socket（状态 07，即 UDP 的"监听"）。"""
     ports = []
-    for proto, path in (("tcp", "/proc/net/tcp"), ("tcp6", "/proc/net/tcp6")):
+    specs = (
+        ("tcp", "/proc/net/tcp", "0A"),
+        ("tcp6", "/proc/net/tcp6", "0A"),
+        ("udp", "/proc/net/udp", "07"),
+        ("udp6", "/proc/net/udp6", "07"),
+    )
+    for proto, path, listen_state in specs:
         content = read_text(path)
         if not content:
             continue
@@ -657,7 +701,7 @@ def collect_ports(args=None):
                 continue
             local = fields[1]
             state = fields[3]
-            if state != "0A":  # 0A = LISTEN
+            if state != listen_state:
                 continue
             try:
                 addr_hex, port_hex = local.rsplit(":", 1)
@@ -665,13 +709,12 @@ def collect_ports(args=None):
             except ValueError:
                 continue
             try:
-                if proto == "tcp":
+                if proto.endswith("6"):
+                    # IPv6 完整解码较繁琐，这里只区分"全网卡"与具体地址
+                    ip = "[::]" if addr_hex == "0" * 32 else "::"
+                else:
                     ip = ".".join(str(int(addr_hex[i:i + 2], 16))
                                   for i in (6, 4, 2, 0))
-                else:
-                    ip = "::"
-                    if addr_hex == "0" * 32:
-                        ip = "[::]"
             except ValueError:
                 ip = "?"
 
@@ -682,16 +725,16 @@ def collect_ports(args=None):
                 "inode": fields[9] if len(fields) > 9 else None,
             })
 
-    # 去重并按端口排序
+    # 去重并按协议+端口排序
     uniq = {}
     for p in ports:
         uniq[(p["proto"], p["port"])] = p
-    return sorted(uniq.values(), key=lambda p: p["port"])
+    return sorted(uniq.values(), key=lambda p: (p["proto"], p["port"]))
 
 
 def render_ports(data):
     if not data:
-        print("未发现监听中的 TCP 端口")
+        print("未发现监听/绑定的端口")
         return
     rows = [[p["proto"], p["address"], p["port"]] for p in data]
     print(render_table(["协议", "监听地址", "端口"], rows))
@@ -739,21 +782,30 @@ def _check_dns():
     return False, "所有域名解析均失败"
 
 
-def _check_network():
-    """多目标 TCP 探测，任一可达即认为外网连通。"""
+def _probe_tcp(target, timeout=3):
+    """探测单个 TCP 目标，返回 (ok, detail)。"""
+    host, port = target
+    try:
+        # 用 with 确保异常路径下 socket 也会被关闭
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+        return True, f"可访问 {host}:{port}"
+    except (OSError, socket.error) as exc:
+        return False, str(exc)
+
+
+def _check_network(timeout=3):
+    """多目标 TCP 并发探测，任一可达即认为外网连通。
+    并发后断网最坏耗时约 timeout，而非 timeout × 目标数。"""
     targets = [("1.1.1.1", 443), ("8.8.8.8", 53), ("223.5.5.5", 443)]
-    errors = []
-    for host, port in targets:
-        try:
-            # 用 with 确保异常路径下 socket 也会被关闭
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(3)
-                sock.connect((host, port))
-            return True, f"可访问 {host}:{port}"
-        except (OSError, socket.error) as exc:
-            errors.append(str(exc))
-            continue
-    detail = errors[0] if errors else "连接失败"
+    with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+        results = [f.result() for f in (pool.submit(_probe_tcp, t, timeout)
+                                        for t in targets)]
+    for ok, detail in results:
+        if ok:
+            return True, detail
+    detail = next((d for ok, d in results if d), "连接失败")
     return False, detail[:60]
 
 
@@ -778,11 +830,13 @@ def collect_doctor(args=None):
     check("root 权限", os.geteuid() == 0,
           "当前是 root" if os.geteuid() == 0 else "普通用户")
 
-    # 网络探测
-    dns_ok, dns_detail = _check_dns()
+    # 网络探测：DNS 与外网连通并发执行，缩短断网环境下的等待
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        dns_future = pool.submit(_check_dns)
+        net_future = pool.submit(_check_network)
+        dns_ok, dns_detail = dns_future.result()
+        net_ok, net_detail = net_future.result()
     check("DNS 解析", dns_ok, dns_detail)
-
-    net_ok, net_detail = _check_network()
     check("外网连通", net_ok, net_detail)
 
     # 磁盘余量
@@ -838,17 +892,17 @@ def build_parser():
 
     sub = parser.add_subparsers(dest="command", metavar="<命令>")
 
-    def add(name, help_text, func, collector, renderer, extra=None):
+    def add(name, help_text, collector, renderer, extra=None):
         p = sub.add_parser(name, help=help_text, description=help_text)
         p.add_argument("-j", "--json", action="store_true",
                        help="以 JSON 格式输出")
         if extra:
             extra(p)
-        p.set_defaults(func=func, collector=collector, renderer=renderer)
+        p.set_defaults(collector=collector, renderer=renderer)
 
-    add("info", "显示系统概览信息", None, collect_info, render_info)
-    add("mem", "显示内存与交换分区使用情况", None, collect_mem, render_mem)
-    add("disk", "显示磁盘挂载点与使用率", None, collect_disk, render_disk)
+    add("info", "显示系统概览信息", collect_info, render_info)
+    add("mem", "显示内存与交换分区使用情况", collect_mem, render_mem)
+    add("disk", "显示磁盘挂载点与使用率", collect_disk, render_disk)
 
     def proc_extra(p):
         p.add_argument("-n", "--limit", type=int, default=10,
@@ -859,14 +913,14 @@ def build_parser():
     def proc_collect(args):
         return collect_proc(limit=args.limit, sort_by=args.sort)
 
-    add("proc", "显示占用最高的进程", None, proc_collect, render_proc,
+    add("proc", "显示占用最高的进程", proc_collect, render_proc,
         extra=proc_extra)
 
-    add("net", "显示网络接口与 DNS 信息", None, collect_net, render_net)
-    add("env", "显示相关环境变量", None, collect_env, render_env)
-    add("ports", "显示监听中的 TCP 端口", None, collect_ports, render_ports)
-    add("uptime", "显示系统运行时长与负载", None, collect_uptime, render_uptime)
-    add("doctor", "检查开发环境完整性", None, collect_doctor, render_doctor)
+    add("net", "显示网络接口与 DNS 信息", collect_net, render_net)
+    add("env", "显示相关环境变量", collect_env, render_env)
+    add("ports", "显示监听/绑定的 TCP 与 UDP 端口", collect_ports, render_ports)
+    add("uptime", "显示系统运行时长与负载", collect_uptime, render_uptime)
+    add("doctor", "检查开发环境完整性", collect_doctor, render_doctor)
 
     return parser
 
@@ -879,16 +933,19 @@ def main(argv=None):
         parser.print_help()
         return 0
 
-    if getattr(args, "json", False) and not sys.stdout.isatty():
-        C.disable()
+    # 颜色状态在运行时按当前 stdout 判定（而非导入时），兼容 stdout
+    # 被重定向/替换的场景；NO_COLOR 约定依旧生效。
+    C._enabled = bool(sys.stdout.isatty()) and not os.environ.get("NO_COLOR")
 
-    data = args.collector(args)
-
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        args.renderer(data)
-        print()
+    try:
+        data = args.collector(args)
+        emit(data, args.json, args.renderer)
+    except KeyboardInterrupt:
+        print("\n已取消", file=sys.stderr)
+        return 130
+    except Exception as exc:  # 单项失败给友好提示，不暴露 traceback
+        print(f"sysx: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
     return 0
 

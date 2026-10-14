@@ -123,6 +123,25 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(sysx.render_bar(0, 10).count("█"), 0)
         self.assertEqual(sysx.render_bar(100, 10).count("█"), 10)
 
+    def test_render_bar_out_of_range_clamped(self):
+        # percent 超出 [0,100] 时必须被 clamp，进度条长度恒等于 width
+        sysx.C.disable()
+        for bad in (-10, 150, 999):
+            with self.subTest(percent=bad):
+                bar = sysx.render_bar(bad, width=20)
+                self.assertEqual(len(bar), 20)
+        # >100 时填满，<0 时为空
+        self.assertEqual(sysx.render_bar(150, 10).count("█"), 10)
+        self.assertEqual(sysx.render_bar(-5, 10).count("█"), 0)
+
+    def test_human_duration_negative_clamped(self):
+        # 负值（时钟回拨等异常）不应产生 "-1d -1h..." 这类输出
+        for raw in (-1, -3600, -999999):
+            with self.subTest(raw=raw):
+                out = sysx.human_duration(raw)
+                self.assertEqual(out, "0s")
+                self.assertNotIn("-", out)
+
 
 class TestColorControl(unittest.TestCase):
     """颜色控制与 NO_COLOR 约定。"""
@@ -247,7 +266,7 @@ class TestCollectors(unittest.TestCase):
         for item in data:
             self.assertIn("proto", item)
             self.assertIn("port", item)
-            self.assertIn(item["proto"], ("tcp", "tcp6"))
+            self.assertIn(item["proto"], ("tcp", "tcp6", "udp", "udp6"))
             self.assertGreater(item["port"], 0)
             self.assertLessEqual(item["port"], 65535)
 
@@ -437,6 +456,131 @@ class TestPackaging(unittest.TestCase):
         urls = self.meta["project"].get("urls", {})
         self.assertIn("Homepage", urls)
         self.assertIn("Repository", urls)
+
+
+class TestPortParsing(unittest.TestCase):
+    """/proc/net/{tcp,udp} 端口解析的纯逻辑（用 mock 喂假数据）。"""
+
+    # 注意：IPv4 地址是小端十六进制。0100007F -> 127.0.0.1；00000000 -> 0.0.0.0
+    TCP = (
+        "  sl  local_address rem_address   st ...\n"
+        "   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 111 1\n"
+        "   1: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 222 1\n"
+        "   2: 0100007F:9999 0100007F:1F90 01 00000000:00000000 00:00000000 00000000 1000 0 333 1\n"
+    )
+    UDP = (
+        "  sl  local_address rem_address   st ...\n"
+        "   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 444 1\n"
+        "   1: 0100007F:1234 0100007F:9999 01 00000000:00000000 00:00000000 00000000 1000 0 555 1\n"
+    )
+
+    def run_collect(self, tcp, tcp6=None, udp=None, udp6=None):
+        mapping = {
+            "/proc/net/tcp": tcp,
+            "/proc/net/tcp6": tcp6,
+            "/proc/net/udp": udp,
+            "/proc/net/udp6": udp6,
+        }
+        with mock.patch.object(sysx, "read_text",
+                               side_effect=lambda p: mapping.get(p)):
+            return sysx.collect_ports(None)
+
+    def test_tcp_listen_parsed(self):
+        data = self.run_collect(tcp=self.TCP)
+        ports = {(p["proto"], p["port"]) for p in data}
+        self.assertIn(("tcp", 8080), ports)    # 0x1F90
+        self.assertIn(("tcp", 80), ports)      # 0x0050
+        # 状态非 LISTEN(0A) 的 9999(0x9999=39321) 不应出现
+        self.assertNotIn(("tcp", 39321), ports)
+
+    def test_ipv4_address_decoded(self):
+        data = self.run_collect(tcp=self.TCP)
+        by_port = {p["port"]: p for p in data}
+        self.assertEqual(by_port[8080]["address"], "127.0.0.1")
+        self.assertEqual(by_port[80]["address"], "0.0.0.0")
+
+    def test_udp_bound_parsed(self):
+        data = self.run_collect(tcp="", udp=self.UDP)
+        ports = {(p["proto"], p["port"]) for p in data}
+        self.assertIn(("udp", 53), ports)      # 0x0035
+        # 状态非 07 的 UDP(0x1234=4660) 不应出现
+        self.assertNotIn(("udp", 4660), ports)
+
+    def test_missing_files_skipped(self):
+        # 只喂 tcp，其余为 None，不应崩溃，且只产出 tcp
+        data = self.run_collect(tcp=self.TCP)
+        self.assertTrue(data)
+        self.assertTrue(all(p["proto"] == "tcp" for p in data))
+
+    def test_dedup_same_proto_port(self):
+        dup = self.TCP + (
+            "   3: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 666 1\n"
+        )
+        data = self.run_collect(tcp=dup)
+        tcp_8080 = [p for p in data if p["proto"] == "tcp" and p["port"] == 8080]
+        self.assertEqual(len(tcp_8080), 1)
+
+    def test_invalid_port_hex_skipped(self):
+        broken = (
+            "  sl  local_address rem_address   st ...\n"
+            "   0: 0100007F:ZZZZ 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1 1\n"
+            "   1: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 2 1\n"
+        )
+        data = self.run_collect(tcp=broken)
+        self.assertEqual([p["port"] for p in data if p["proto"] == "tcp"], [8080])
+
+    def test_invalid_ip_hex_yields_question_mark(self):
+        broken = (
+            "  sl  local_address rem_address   st ...\n"
+            "   0: ZZZZZZZZ:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1 1\n"
+        )
+        data = self.run_collect(tcp=broken)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["port"], 8080)
+        self.assertEqual(data[0]["address"], "?")
+
+
+class TestDistroParsing(unittest.TestCase):
+    """/etc/os-release 解析：引号剥离与续行合并。"""
+
+    def _read(self, content):
+        with mock.patch.object(sysx, "read_text", return_value=content):
+            return sysx._read_distro()
+
+    def test_quotes_stripped_once(self):
+        content = 'NAME="Ubuntu"\nPRETTY_NAME="Ubuntu 24.04.3 LTS"\n'
+        self.assertEqual(self._read(content), "Ubuntu 24.04.3 LTS")
+
+    def test_unmatched_quote_preserved(self):
+        # 仅一端有引号时不应剥离（旧 .strip('"') 会误剥首引号）
+        content = 'PRETTY_NAME="Ubuntu\n'
+        self.assertEqual(self._read(content), '"Ubuntu')
+
+    def test_inner_quote_not_stripped(self):
+        # 首尾不成对（尾非引号）时，旧 .strip('"') 会误伤首引号
+        content = 'PRETTY_NAME="a"b\n'
+        self.assertEqual(self._read(content), '"a"b')
+
+    def test_single_quotes(self):
+        content = "PRETTY_NAME='Arch Linux'\n"
+        self.assertEqual(self._read(content), "Arch Linux")
+
+    def test_line_continuation(self):
+        # 反斜杠续行应被合并
+        content = 'NAME="Debian\\\n GNU/Linux"\n'
+        self.assertEqual(self._read(content), "Debian GNU/Linux")
+
+    def test_pretty_name_preferred(self):
+        content = 'NAME="Ubuntu"\nPRETTY_NAME="Ubuntu 24.04"\n'
+        self.assertEqual(self._read(content), "Ubuntu 24.04")
+
+    def test_fallback_to_name(self):
+        content = 'NAME="Alpine"\nID=alpine\n'
+        self.assertEqual(self._read(content), "Alpine")
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(self._read(""))
+        self.assertIsNone(self._read(None))
 
 
 if __name__ == "__main__":

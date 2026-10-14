@@ -77,7 +77,7 @@ sysx <command> [options]
 | `disk` | Disk mounts & usage (sorted by usage) |
 | `proc` | Top processes, sortable by CPU / memory |
 | `net` | Network interfaces, MAC, link status, local IP, DNS |
-| `ports` | Listening TCP ports |
+| `ports` | Listening TCP ports & bound UDP ports |
 | `env` | Relevant environment variables (shell, toolchains, containers) |
 | `uptime` | Uptime and 1/5/15-minute load |
 | `doctor` | Dev-environment checkup: toolchains, network, disk headroom |
@@ -193,7 +193,7 @@ $ sysx doctor
 | Disk mounts | `/proc/mounts` + `shutil.disk_usage` |
 | Network interfaces | `/sys/class/net/*` |
 | DNS | `/etc/resolv.conf` |
-| Listening ports | `/proc/net/tcp`, `/proc/net/tcp6` |
+| Listening/bound ports | `/proc/net/tcp`, `/proc/net/tcp6`, `/proc/net/udp`, `/proc/net/udp6` |
 
 **On CPU usage:** reading `/proc/<pid>/stat` directly only yields a process's
 cumulative CPU time; dividing by the total gives a wrong result (long-running
