@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-10-15
+
+### Changed（变更）
+
+- PyPI 项目页描述切换为英文版（`pyproject.toml` 的 `readme` 指向 `README.en.md`），面向国际用户原生展示；中文版 README 仍随仓库分发，两版顶部的语言切换链接改为 GitHub 绝对地址，在 PyPI 页面上也可点击。
+
 ## [1.1.0] - 2026-10-14
 
 ### Added（新增）
@@ -43,5 +49,6 @@
 - 人类可读表格与 `--json` 机器可读输出双模式。
 - GitHub Actions 覆盖 Python 3.8 – 3.12 的 Linux / macOS 多平台测试，Release 工作流自动构建 wheel 与 sdist。
 
+[1.2.0]: https://github.com/maoxian3824/sysx/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/maoxian3824/sysx/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/maoxian3824/sysx/releases/tag/v1.0.0

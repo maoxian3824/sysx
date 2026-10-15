@@ -1,6 +1,6 @@
 # sysx
 
-> English version: [README.en.md](README.en.md)
+> English version: [README.en.md](https://github.com/maoxian3824/sysx/blob/master/README.en.md)
 
 > 轻量级系统信息与开发辅助 CLI 工具 — 纯 Python 标准库实现，零第三方依赖。
 
@@ -52,8 +52,8 @@ python3 sysx.py info
 ### 方式四：从 GitHub Release 安装
 
 ```bash
-curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.1.0-py3-none-any.whl
-pip install sysx_cli-1.1.0-py3-none-any.whl
+curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.2.0-py3-none-any.whl
+pip install sysx_cli-1.2.0-py3-none-any.whl
 ```
 
 ## 使用

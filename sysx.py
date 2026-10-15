@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # 系统级常量，用于 /proc 解析
 try:

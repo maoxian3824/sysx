@@ -1,6 +1,6 @@
 # sysx
 
-> 中文版：[README.md](README.md)
+> 中文版：[README.md](https://github.com/maoxian3824/sysx/blob/master/README.md)
 
 > Lightweight system-info & developer-assistant CLI — pure Python standard library, zero third-party dependencies.
 
@@ -58,8 +58,8 @@ python3 sysx.py info
 ### Method 4: From a GitHub Release
 
 ```bash
-curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.1.0-py3-none-any.whl
-pip install sysx_cli-1.1.0-py3-none-any.whl
+curl -LO https://github.com/maoxian3824/sysx/releases/latest/download/sysx_cli-1.2.0-py3-none-any.whl
+pip install sysx_cli-1.2.0-py3-none-any.whl
 ```
 
 ## Usage

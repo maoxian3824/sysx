@@ -6,9 +6,11 @@ build-backend = "setuptools.build_meta"
 # PyPI 上的发行包名。运行命令仍是 sysx（见 [project.scripts]）。
 # 注意：PyPI 上 sysx / systools / systool 均已被占用，故使用 sysx-cli。
 name = "sysx-cli"
-version = "1.1.0"
+version = "1.2.0"
 description = "轻量级系统信息与开发辅助 CLI 工具，纯标准库实现，零第三方依赖"
-readme = "README.md"
+# PyPI 项目页展示的描述。使用英文版以面向国际用户；
+# 中文版 README.md 通过仓库与文档链接访问。
+readme = "README.en.md"
 requires-python = ">=3.8"
 license = "MIT"
 license-files = ["LICENSE"]
